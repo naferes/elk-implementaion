@@ -1,0 +1,307 @@
+ELASTICSEARCH CLUSTER - HTTPS and TLS Security
+
+Nodes IP Addresses:
+Node1 - 192.168.56.111
+Node2 - 192.168.56.112
+Node3 - 192.168.56.113
+
+curl -X GET "localhost:9200/_cluster/health?pretty"
+
+.::On Node 1::.
+sudo su
+cd /usr/share/elasticsearch
+bin/elasticsearch-certutil ca
+Enter
+Enter
+bin/elasticsearch-certutil cert --ca elastic-stack-ca.p12
+Enter
+Enter
+Enter
+
+mv elastic-certificates.p12 /etc/elasticsearch/
+
+cd /etc/elasticsearch/
+ls -ltr
+
+nano /etc/elasticsearch/elasticsearch.yml
+- Copy and paste following 5 lines in elasticsearch.yml file
+xpack.security.enabled: true
+xpack.security.transport.ssl.enabled: true
+xpack.security.transport.ssl.verification_mode: certificate
+xpack.security.transport.ssl.keystore.path: elastic-certificates.p12
+xpack.security.transport.ssl.truststore.path: elastic-certificates.p12
+
+chown root:elasticsearch /etc/elasticsearch/elastic-certificates.p12
+chmod 660 /etc/elasticsearch/elastic-certificates.p12
+
+Copy certificate to the other hosts
+scp /etc/elasticsearch/elastic-certificates.p12 vagrant@192.168.56.112:/home/vagrant/
+scp /etc/elasticsearch/elastic-certificates.p12 vagrant@192.168.56.113:/home/vagrant/
+
+systemctl restart elasticsearch 
+ 
+.::On Node 2::.
+sudo su
+cp /home/vagrant/elastic-certificates.p12 /etc/elasticsearch/
+
+nano /etc/elasticsearch/elasticsearch.yml
+- Copy and paste following 5 lines in elasticsearch.yml file 
+xpack.security.enabled: true
+xpack.security.transport.ssl.enabled: true
+xpack.security.transport.ssl.verification_mode: certificate
+xpack.security.transport.ssl.keystore.path: elastic-certificates.p12
+xpack.security.transport.ssl.truststore.path: elastic-certificates.p12
+
+chown root:elasticsearch /etc/elasticsearch/elastic-certificates.p12
+chmod 660 /etc/elasticsearch/elastic-certificates.p12
+
+systemctl restart elasticsearch 
+
+.::On Node 3::.
+sudo su
+cp /home/vagrant/elastic-certificates.p12 /etc/elasticsearch/
+
+
+nano /etc/elasticsearch/elasticsearch.yml
+- Copy and paste following 5 lines in elasticsearch.yml file 
+xpack.security.enabled: true
+xpack.security.transport.ssl.enabled: true
+xpack.security.transport.ssl.verification_mode: certificate
+xpack.security.transport.ssl.keystore.path: elastic-certificates.p12
+xpack.security.transport.ssl.truststore.path: elastic-certificates.p12
+
+chown root:elasticsearch /etc/elasticsearch/elastic-certificates.p12
+chmod 660 /etc/elasticsearch/elastic-certificates.p12
+
+systemctl restart elasticsearch 
+
+- Set passwords for default users
+cd /usr/share/elasticsearch
+bin/elasticsearch-setup-passwords interactive
+demo passwords:
+elastic:elastic
+apm_system:apmsystem
+kibana:kibana
+logstash_system:logstash
+beats_system:beatssystem
+remote_monitoring_user:remotemonitoring
+- you can generate random passwords automatic using following command
+bin/elasticsearch-setup-passwords auto
+- be sure that you will remember them
+
+Test cluster health:
+curl -u elastic:elastic  -X GET "localhost:9200/_cluster/health?pretty"
+
+Enter this ADDITIONAL 4 lines in elasticsearch.yml file on every node to eneble HTTPS:
+
+nano /etc/elasticsearch/elasticsearch.yml
+xpack.security.http.ssl.enabled: true
+xpack.security.http.ssl.keystore.path: elastic-certificates.p12
+xpack.security.http.ssl.truststore.path: elastic-certificates.p12
+xpack.security.http.ssl.client_authentication: optional
+
+systemctl restart elasticsearch
+
+
+Configure Kibana on Node 3
+
+cd /etc/elasticsearch/
+
+
+openssl pkcs12 -in elastic-certificates.p12 -out newfile.crt.pem -clcerts -nokeys
+Enter
+openssl pkcs12 -in elastic-certificates.p12 -out newfile.key.pem -nocerts -nodes
+Enter
+
+mv newfile.* /etc/kibana
+
+cd /etc/kibana 
+
+ls -ltr
+
+chown root:kibana /etc/kibana/newfile*
+chmod 660 /etc/kibana/newfile*
+nano /etc/kibana/kibana.yml
+
+Put this lines into the file
+
+elasticsearch.hosts: ["https://localhost:9200"]
+elasticsearch.username: "kibana"
+elasticsearch.password: "kibana"
+server.ssl.enabled: true
+server.ssl.certificate: /etc/kibana/newfile.crt.pem
+server.ssl.key: /etc/kibana/newfile.key.pem
+elasticsearch.ssl.verificationMode: none
+
+
+systemctl restart kibana
+
+https://192.168.56.113:5601/
+
+Logstash on Node 3
+
+cd /home/vagrant/
+
+curl https://artifacts.elastic.co/downloads/logstash/logstash-7.9.0.rpm -o logstash-7.9.0.rpm
+
+yum -y install java
+
+rpm -i logstash-7.9.0.rpm
+
+cp /etc/kibana/newfile.crt.pem /etc/logstash/newfile.crt.pem
+
+chown root:logstash /etc/logstash/newfile.crt.pem
+chmod 660 /etc/logstash/newfile.crt.pem
+
+nano /etc/logstash/pipelines.yml
+
+Replace default pipeline:
+- pipeline.id: test
+  path.config: "/etc/logstash/conf.d/testpipe.conf"
+
+Create conf file for the pipeline:
+nano /etc/logstash/conf.d/testpipe.conf
+
+Put these lines on it:
+==========================================================================
+input {
+    beats {
+        host => "192.168.56.113"
+        port => "5033"
+    }
+}
+
+#filter {
+#}
+
+output {
+  elasticsearch {
+    hosts => "https://localhost:9200"
+    index => "estack-test-pipeline-index"
+    user => "elastic"
+    password => "elastic"
+    cacert => "/etc/logstash/newfile.crt.pem"
+    ssl_certificate_verification => false
+  }
+}
+
+==========================================================================
+
+systemctl start logstash
+
+Check the log file to see that everything looks good maybe it will take a while 
+for logstash to create the file(depending on VM resources)
+
+tail -f /var/log/logstash/logstash-plain.log
+
+Filebeat Configuration(Windows)
+
+Download this example apachelogs.log file
+
+Link - https://mega.nz/file/jGJDEQjZ#sceYkyaCo7GXiw2ncK3xVLBdfCP1OSXzqKkFTWC8--A
+
+Download ready for using filebeat.zip file.
+
+Link - https://mega.nz/file/ODQnGajR#1jgjFVqn5Z_hPOTTO7NXKqQ8n8NNouLhbr2otTYfR8Q
+
+Create "logs" folder on your desktop and change the path in the filebeat.yml file with your username.
+ex: - C:\Users\YourUsername\Desktop\logs\*.log
+
+Open PowerShell like an administrator and execute following commands:
+
+cd 'C:\Program Files\filebeat\' - or your filebeat installation directory
+
+.\filebeat.exe -c filebeat.yml -e -d "*"
+
+
+
+
+
+
+
+
+
+
+
+
+newfile.crt.pem
+Bag Attributes
+    friendlyName: instance
+    localKeyID: 54 69 6D 65 20 31 36 32 37 39 32 33 32 36 34 30 32 38
+subject=CN = instance
+
+issuer=CN = Elastic Certificate Tool Autogenerated CA
+
+-----BEGIN CERTIFICATE-----
+MIIDIzCCAgugAwIBAgIVAOsYfNKZnGg4bedqdJOFmkp8XFOlMA0GCSqGSIb3DQEB
+CwUAMDQxMjAwBgNVBAMTKUVsYXN0aWMgQ2VydGlmaWNhdGUgVG9vbCBBdXRvZ2Vu
+ZXJhdGVkIENBMB4XDTIxMDgwMjE2NTQyM1oXDTI0MDgwMTE2NTQyM1owEzERMA8G
+A1UEAxMIaW5zdGFuY2UwggEiMA0GCSqGSIb3DQEBAQUAA4IBDwAwggEKAoIBAQDV
+dm+zA1TTtAPBbRsuj7tEHehwWB8g2s1d8b6lv2J1mYPh4u7LzOJpAYVGpex+RSsX
+AK3zkxP7t+b+JPFCJKZWYfzM8e+VmHJugpP8ZGfpWIet8yVS6iJdsaiNKnu1M6DC
+2VSTSjB78ze2504gXR+OitG4XGISXZWVdy/rppOk/bu4lw63Np8/cEjv8b0Pi7/p
+CsnFGlg5lHxtU1XH4yDfi3QOjBAItys2pZhuNMr9S1pnPvGaDIX5LUBA2AWrokMi
+m1qsczITuT5iVmPE5fkNneAhWbqFHNPgzDnfVcsjH/rTKMrEBVoKrVZVh3KYv2r5
+w/BDB8bE5j3ZbQpErdDDAgMBAAGjTTBLMB0GA1UdDgQWBBScXq8NPCCqcsno9qy0
+roJJH+mh+jAfBgNVHSMEGDAWgBQVznD/9PhVyGt3SupKXexIxjLOJDAJBgNVHRME
+AjAAMA0GCSqGSIb3DQEBCwUAA4IBAQANw+V9dpORbD20CbOcTxTpaLuyEDcXT+qE
+YnJmgUGOGgi1vasGfwr93GGc4ZON5DGOypHe+9J/YiREHKWXcTTiirnDt4xKkpe1
+OnMUw3/v+QA/qLn23T+ubBX40XruNI4Dc/OKZpgipDeLQm0s50apVWNjdGugnOrH
+5YZLciJMyGb3ed3J2JFWgrZq+p0FrvuvYsAXfXoAue3YUNjteAepn+WDtRIX2j5o
+XS0os9xSDxGHXTcQyoxnRRO2bkPkvSLxFNL2RgxH6RDiAAUVJ8N0FzBJ+8DFEDaQ
+hkqBa+utwnU+1+CuLFhob+gCijqCaFOIu1Iwcm8QDjZLAPETVrVn
+-----END CERTIFICATE-----
+
+
+
+newfile.key.pem
+
+Bag Attributes
+    friendlyName: instance
+    localKeyID: 54 69 6D 65 20 31 36 32 37 39 32 33 32 36 34 30 32 38
+Key Attributes: <No Attributes>
+-----BEGIN PRIVATE KEY-----
+MIIEvgIBADANBgkqhkiG9w0BAQEFAASCBKgwggSkAgEAAoIBAQDVdm+zA1TTtAPB
+bRsuj7tEHehwWB8g2s1d8b6lv2J1mYPh4u7LzOJpAYVGpex+RSsXAK3zkxP7t+b+
+JPFCJKZWYfzM8e+VmHJugpP8ZGfpWIet8yVS6iJdsaiNKnu1M6DC2VSTSjB78ze2
+504gXR+OitG4XGISXZWVdy/rppOk/bu4lw63Np8/cEjv8b0Pi7/pCsnFGlg5lHxt
+U1XH4yDfi3QOjBAItys2pZhuNMr9S1pnPvGaDIX5LUBA2AWrokMim1qsczITuT5i
+VmPE5fkNneAhWbqFHNPgzDnfVcsjH/rTKMrEBVoKrVZVh3KYv2r5w/BDB8bE5j3Z
+bQpErdDDAgMBAAECggEAaSKkwEgfQwfyI5YP4b50DwgmABM+/akWpjMXYb5iCabb
+QGnLkIAwcWSI1nOJh+WcY/93LbUejgeVU04xr5CqhnhLkUuF46nKjqhsp85yKYlr
+hh7wHqbn1zrV1/V5KZWsk9uD3umW+K2hnsnM/n6vOL8hrQp/WSlTr+KcrRWFuahC
+laLAgrMatHnbb245qYTt3M3kq8TIpe/RFrJRR0SKY2KkHJXcQP2YiW+289mIGvn1
+MAHIXZcizju0ZYLUUsEF2xFiXkZFzHDQS0P5Zhc8XKcotoVHFiRTBYcOdUpQ+4R6
+qJcnSUuB0Kv81G2x8xx+RaBLQo8gtdo4TGJPn5IMpQKBgQDguNy622GsPDbtd7xW
+Gr+2PoC93hYbQ27czhz5O+6r5pDzjDHIeL5Gg+/RAHt4nvAmxR6H/xUgwOG/ctca
+5qXpLAfhzMokhdqwK/cN7YkryFYPOLdrz6MHFZvxkD7Q84658p4uh1uXPztvV0bu
+Hc15Bx8nTSH5w5Cy9/uREfyVbwKBgQDzLGJubozNS9PimGIfzC6IkmMsSo375eOE
+xYD7+HTASSQAN0c8DUBJq8nOPKGcyfB/Pljk25BtqNTYxv+tW/kRLxIKBWsqvhCk
+SJ6UX12jkQRoZJVV4xZoXnA97rbeGHoGsuqBNGOIAD85LrrblGt69V0N37tBxOeW
+FRKyvf2X7QKBgQDcn+Hlefj8telfXsyC5KQPcnHG9sFRZvTyx1DeyJ5cGnN5CMzf
+etukM2hBE24lUDWKesCs2ByQGY4I/eB9wrBkqhva7coP7XJ0v9U/0VN4rqj/LLm3
+mRT/oZGGqg1h65zWpoHyQGYFqcjaWR+EK7JM/lbxqOKQahYn/xr2pGgM9QKBgQC3
+JEBlx2DH5UoJKJcON6r8NLP4UZYplvQJtO311yOnBe7VMsy1j41Rbs4oQ0W8XeKB
+EqXEhxB5ZmQXd5hsKg6lQHwni/kwUcEa2Y6FVGWjoL5fGRHXg5YGuMlz+2tCTdDp
+Zqpy8M/dR8JWALm+UkO4cT7KCixv1ipMwEY61Bg/6QKBgA+GY8uHX8QOk5r3K+ob
+RRshZAZsUJCAEhVAw5KID6tVlf5vQxFsfI3svOc+eC50P62JySpTBDc/9VVH5RMq
+YcU/cvndtl2S9kFahdZvdQ9Ii3CIfvJu8zr1PB+4ewSKfqMI76Qt6G6kIyzi/e5U
+lh1BCJ/j+x6NdS1/Kamh0HGI
+-----END PRIVATE KEY-----
+
+
+
+
+
+
+ host: "https://localhost:5601"
+  ssl.certificate: "/etc/metricbeat/newfile.crt.pem"
+  ssl.key: "/etc/metricbeat/newfile.key.pem"
+  ssl.verification_mode: "none"
+
+
+ssl.certificate: "/etc/metricbeat/newfile.crt.pem"
+  ssl.key: "/etc/metricbeat/newfile.key.pem"
+  ssl.verification_mode: "none"
+
+
